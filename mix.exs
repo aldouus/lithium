@@ -13,7 +13,7 @@ defmodule Lithium.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :crypto, :public_key, :inets, :ssl],
+      extra_applications: [:logger, :crypto, :public_key, :inets, :ssl, :xmerl],
       mod: {Lithium.Application, []}
     ]
   end
@@ -21,6 +21,7 @@ defmodule Lithium.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:plug, "~> 1.0", only: :test},
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
       {:jose, "~> 1.11"}

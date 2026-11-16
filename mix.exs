@@ -23,7 +23,8 @@ defmodule Lithium.MixProject do
       {:req, "~> 0.5"},
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
-      {:jose, "~> 1.11"}
+      {:jose, "~> 1.11"},
+      {:plug, "~> 1.16"}
     ]
   end
 end

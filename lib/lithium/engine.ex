@@ -58,19 +58,17 @@ defmodule Lithium.Engine do
   end
 
   defp reconcile(apple, spotify, snap_apple, snap_spotify) do
-    removed =
-      MapSet.union(
-        MapSet.difference(snap_apple, apple),
-        MapSet.difference(snap_spotify, spotify)
-      )
+    apple_removed = MapSet.difference(snap_apple, apple)
+    spotify_removed = MapSet.difference(snap_spotify, spotify)
+    removed = MapSet.union(apple_removed, spotify_removed)
 
-    apple_kept = MapSet.difference(apple, removed)
-    spotify_kept = MapSet.difference(spotify, removed)
+    apple_added = MapSet.difference(apple, snap_apple)
+    spotify_added = MapSet.difference(spotify, snap_spotify)
 
     plan(
-      apple_add: MapSet.difference(spotify_kept, apple_kept),
+      apple_add: spotify_added |> MapSet.difference(removed) |> MapSet.difference(apple),
       apple_remove: MapSet.intersection(apple, removed),
-      spotify_add: MapSet.difference(apple_kept, spotify_kept),
+      spotify_add: apple_added |> MapSet.difference(removed) |> MapSet.difference(spotify),
       spotify_remove: MapSet.intersection(spotify, removed)
     )
   end

@@ -34,6 +34,14 @@ defmodule Lithium.EngineTest do
              {:ok, plan(%{spotify_remove: set(["clash"])})}
   end
 
+  test "leaves a key that was already only on one side" do
+    snapshot = %{apple: set(["only-apple", "both"]), spotify: set(["both"])}
+    apple = set(["only-apple", "both"])
+    spotify = set(["both"])
+
+    assert Engine.diff(apple, spotify, snapshot, :apple) == {:ok, plan()}
+  end
+
   test "plans nothing when both sides added the same key" do
     snapshot = %{apple: set(["old"]), spotify: set(["old"])}
     current = set(["old", "shared"])

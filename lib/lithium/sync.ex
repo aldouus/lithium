@@ -90,8 +90,10 @@ defmodule Lithium.Sync do
   end
 
   defp apple_tokens(credentials) do
-    with {:ok, music} <- Lithium.Credentials.token(credentials, "apple_music", "user_token"),
-         {:ok, podcasts} <- Lithium.Credentials.token(credentials, "apple_podcasts", "user_token") do
+    with {:ok, music} <-
+           Lithium.Credentials.token(credentials, "apple_music", "music_user_token"),
+         {:ok, podcasts} <-
+           Lithium.Credentials.token(credentials, "apple_podcasts", "media_user_token") do
       {:ok,
        %{
          music: music,
@@ -166,7 +168,7 @@ defmodule Lithium.Sync do
 
       {:ok, plan} ->
         case apply_favorite_plan(ctx, plan, side_index(apple), side_index(spotify)) do
-          :ok -> snapshot_favorites(ctx)
+          :ok -> snapshot_favorites(ctx, plan)
           other -> other
         end
     end
@@ -215,7 +217,7 @@ defmodule Lithium.Sync do
     end
   end
 
-  defp snapshot_favorites(ctx) do
+  defp snapshot_favorites(ctx, plan) do
     apple =
       load_songs(
         fn -> ctx.apple_music.favorites(ctx.music_token, ctx.storefront, ctx.http) end,
@@ -226,6 +228,7 @@ defmodule Lithium.Sync do
 
     case {apple, spotify} do
       {{:ok, apple_keys, _}, {:ok, spotify_keys, _}} ->
+        {apple_keys, spotify_keys} = drop_unapplied(apple_keys, spotify_keys, plan)
         write_snapshot(ctx.tenant_id, "favorites", apple_keys, spotify_keys)
         :ok
 
@@ -243,7 +246,7 @@ defmodule Lithium.Sync do
 
           {:ok, plan} ->
             case apply_show_plan(ctx, plan, apple_index, spotify_index) do
-              :ok -> snapshot_shows(ctx)
+              :ok -> snapshot_shows(ctx, plan)
               other -> other
             end
         end
@@ -262,27 +265,32 @@ defmodule Lithium.Sync do
     end
   end
 
-  defp match_shows(_ctx, [], _apple_shows) do
-    {:ok, MapSet.new(), MapSet.new(), %{}, %{}}
-  end
-
   defp match_shows(ctx, spotify_shows, apple_shows) do
     followed = MapSet.new(Enum.map(apple_shows, & &1.id))
 
-    with {:ok, rows} when is_list(rows) <-
-           ctx.listen_notes.lookup(Enum.map(spotify_shows, & &1.id), ctx.http) do
-      rows = Map.new(rows, &{&1.spotify_id, &1})
+    with {:ok, rows} <- lookup_rows(ctx, spotify_shows) do
+      by_spotify_id = Map.new(rows, &{&1.spotify_id, &1})
 
-      {apple_keys, spotify_keys, apple_index, spotify_index} =
+      confirmed =
         Enum.reduce(spotify_shows, {MapSet.new(), MapSet.new(), %{}, %{}}, fn show, acc ->
-          case Map.get(rows, show.id) do
+          case Map.get(by_spotify_id, show.id) do
             nil -> acc
             row -> confirm_spotify_show(ctx, show, row, followed, acc)
           end
         end)
 
+      {apple_keys, spotify_keys, apple_index, spotify_index} =
+        include_known_follows(ctx, followed, rows, spotify_shows, confirmed)
+
       {:ok, apple_keys, spotify_keys, apple_index, spotify_index}
-    else
+    end
+  end
+
+  defp lookup_rows(_ctx, []), do: {:ok, []}
+
+  defp lookup_rows(ctx, spotify_shows) do
+    case ctx.listen_notes.lookup(Enum.map(spotify_shows, & &1.id), ctx.http) do
+      {:ok, rows} when is_list(rows) -> {:ok, rows}
       {:error, reason} -> {:error, reason}
       other -> {:error, other}
     end
@@ -303,17 +311,62 @@ defmodule Lithium.Sync do
              ctx.http
            ),
          {:ok, _} <-
-           ctx.confirm_show.(episode_identity(feed), %{podcast_guid: nil, episode_guids: guids}) do
+           ctx.confirm_show.(feed_identity(feed), %{podcast_guid: nil, episode_guids: guids}) do
       remember_show(show, itunes, followed, acc)
     else
       _ -> acc
     end
   end
 
-  defp episode_identity(%{episode_guids: %MapSet{} = guids}),
-    do: %{podcast_guid: nil, episode_guids: guids}
+  defp feed_identity(%{podcast_guid: guid, episode_guids: %MapSet{} = episodes}) do
+    %{podcast_guid: blank_to_nil(guid), episode_guids: episodes}
+  end
 
-  defp episode_identity(_feed), do: %{podcast_guid: nil, episode_guids: MapSet.new()}
+  defp feed_identity(_feed), do: %{podcast_guid: nil, episode_guids: MapSet.new()}
+
+  defp blank_to_nil(value) when is_binary(value) and value != "", do: value
+  defp blank_to_nil(_value), do: nil
+
+  defp include_known_follows(ctx, followed, rows, spotify_shows, acc) do
+    resolved = MapSet.new(rows, & &1.spotify_id)
+
+    if Enum.all?(spotify_shows, &MapSet.member?(resolved, &1.id)) do
+      claimed = claimed_itunes(rows)
+
+      case read_snapshot(ctx.tenant_id, "shows") do
+        %{apple: apple, spotify: spotify} ->
+          known = MapSet.union(apple, spotify)
+
+          Enum.reduce(followed, acc, fn id, acc ->
+            remember_known_follow(id, known, claimed, acc)
+          end)
+
+        _ ->
+          acc
+      end
+    else
+      acc
+    end
+  end
+
+  defp remember_known_follow(id, known, claimed, acc) do
+    key = "itunes:" <> id
+    {apple_keys, spotify_keys, apple_index, spotify_index} = acc
+
+    if MapSet.member?(known, key) and not MapSet.member?(claimed, id) do
+      {MapSet.put(apple_keys, key), spotify_keys, Map.put(apple_index, key, %{id: id}),
+       spotify_index}
+    else
+      {apple_keys, spotify_keys, apple_index, spotify_index}
+    end
+  end
+
+  defp claimed_itunes(rows) do
+    rows
+    |> Enum.map(&itunes_text(Map.get(&1, :itunes_id)))
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
 
   defp remember_show(
          show,
@@ -398,9 +451,10 @@ defmodule Lithium.Sync do
     apply(ctx.spotify, fun, [ctx.spotify_token, ids, ctx.http])
   end
 
-  defp snapshot_shows(ctx) do
+  defp snapshot_shows(ctx, plan) do
     case current_shows(ctx) do
       {:ok, apple_keys, spotify_keys, _apple_index, _spotify_index} ->
+        {apple_keys, spotify_keys} = drop_unapplied(apple_keys, spotify_keys, plan)
         write_snapshot(ctx.tenant_id, "shows", apple_keys, spotify_keys)
         :ok
 
@@ -483,7 +537,7 @@ defmodule Lithium.Sync do
 
         {:ok, plan} ->
           case apply_playlist_plan(ctx, plan, apple, spotify, apple_id, spotify_id) do
-            :ok -> snapshot_playlist(ctx, name, apple_id, spotify_id)
+            :ok -> snapshot_playlist(ctx, name, apple_id, spotify_id, plan)
             other -> other
           end
       end
@@ -551,7 +605,7 @@ defmodule Lithium.Sync do
     end
   end
 
-  defp snapshot_playlist(ctx, name, apple_id, spotify_id) do
+  defp snapshot_playlist(ctx, name, apple_id, spotify_id, plan) do
     apple =
       load_songs(
         fn -> ctx.apple_music.playlist_tracks(ctx.music_token, apple_id, ctx.http) end,
@@ -566,12 +620,22 @@ defmodule Lithium.Sync do
 
     case {apple, spotify} do
       {{:ok, apple_keys, _}, {:ok, spotify_keys, _}} ->
+        {apple_keys, spotify_keys} = drop_unapplied(apple_keys, spotify_keys, plan)
         write_snapshot(ctx.tenant_id, "playlist:" <> name, apple_keys, spotify_keys)
         :ok
 
       _ ->
         {:error, :unreadable}
     end
+  end
+
+  defp drop_unapplied(apple_keys, spotify_keys, plan) do
+    pending =
+      plan_field(plan, :spotify_add)
+      |> MapSet.difference(spotify_keys)
+      |> MapSet.union(MapSet.difference(plan_field(plan, :apple_add), apple_keys))
+
+    {MapSet.difference(apple_keys, pending), MapSet.difference(spotify_keys, pending)}
   end
 
   defp probe(ctx, flag, probe_error, fun) do

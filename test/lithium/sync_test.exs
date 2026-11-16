@@ -57,9 +57,14 @@ defmodule Lithium.SyncTest do
     refute Enum.any?(calls(), &match?({:ensure_playlist, _, _}, &1))
 
     assert snapshot("favorites") == %{
-             apple: MapSet.new(["USAAA1", "USAAA2", "USMISS"]),
+             apple: MapSet.new(["USAAA1", "USAAA2"]),
              spotify: MapSet.new(["USAAA1", "USAAA2"])
            }
+
+    assert Lithium.sync("ada", test_opts()) ==
+             {:ok, %{favorites: :ok, shows: :ok, playlists: :ok}}
+
+    assert Enum.count(calls(), &(&1 == {:search_track, "USMISS"})) == 2
 
     assert Enum.any?(Bank.get(:apple_favorites), &(&1.id == "ax"))
     assert Enum.any?(Bank.get(:spotify_liked), &(&1.id == "sx"))
@@ -115,7 +120,7 @@ defmodule Lithium.SyncTest do
       ],
       feeds: %{
         "https://example.test/feed" => %{
-          podcast_guid: "pod-guid",
+          podcast_guid: nil,
           episode_guids: MapSet.new(["ep-1"])
         }
       },
@@ -181,7 +186,7 @@ defmodule Lithium.SyncTest do
       ],
       feeds: %{
         "https://example.test/feed" => %{
-          podcast_guid: "pod-guid",
+          podcast_guid: nil,
           episode_guids: MapSet.new(["ep-1"])
         }
       },
@@ -313,8 +318,8 @@ defmodule Lithium.SyncTest do
 
     refreshed = %{
       "spotify" => %{"access_token" => "refreshed-token", "refresh_token" => "refresh"},
-      "apple_music" => %{"user_token" => "music-user", "storefront" => "us"},
-      "apple_podcasts" => %{"user_token" => "podcast-user", "storefront" => "us"}
+      "apple_music" => %{"music_user_token" => "music-user", "storefront" => "us"},
+      "apple_podcasts" => %{"media_user_token" => "podcast-user", "storefront" => "us"}
     }
 
     Bank.seed(%{refresh: refreshed})
@@ -356,6 +361,48 @@ defmodule Lithium.SyncTest do
            }
   end
 
+  test "a one-sided podcast guid stays unmatched" do
+    write_credentials()
+
+    Bank.seed(%{
+      spotify_shows: [%{id: "sp-show", name: "News"}],
+      apple_shows: [%{id: "111", name: "News"}],
+      listen_notes: [
+        %{spotify_id: "sp-show", itunes_id: "111", feed_url: "https://example.test/feed"}
+      ],
+      feeds: %{
+        "https://example.test/feed" => %{
+          podcast_guid: "pod-guid",
+          episode_guids: MapSet.new(["ep-1"])
+        }
+      },
+      episode_guids: %{"111" => MapSet.new(["ep-1"])}
+    })
+
+    assert {:ok, %{shows: :ok}} = Lithium.sync("ada", test_opts())
+    refute {:follow, "111"} in calls()
+    refute {:unfollow, "111"} in calls()
+    assert snapshot("shows") == %{apple: MapSet.new(), spotify: MapSet.new()}
+  end
+
+  test "unfollows an apple show that left spotify" do
+    write_credentials()
+    put_snapshot("shows", ["itunes:111"], ["itunes:111"])
+
+    Bank.seed(%{
+      apple_shows: [%{id: "111", name: "News"}],
+      spotify_shows: []
+    })
+
+    assert {:ok, %{shows: :ok}} = Lithium.sync("ada", test_opts())
+    assert {:unfollow, "111"} in calls()
+
+    assert snapshot("shows") == %{
+             apple: MapSet.new(),
+             spotify: MapSet.new()
+           }
+  end
+
   def song_key(%{isrc: isrc}) when is_binary(isrc) and isrc != "", do: {:ok, String.upcase(isrc)}
   def song_key(_track), do: :unmatched
 
@@ -367,16 +414,24 @@ defmodule Lithium.SyncTest do
   end
 
   def confirm_show(left, right) do
-    assert left.podcast_guid == nil
-    assert right.podcast_guid == nil
+    cond do
+      present_guid?(left.podcast_guid) and left.podcast_guid == right.podcast_guid ->
+        {:ok, {:podcast_guid, left.podcast_guid}}
 
-    if match?(%MapSet{}, left.episode_guids) and left.episode_guids == right.episode_guids and
-         MapSet.size(left.episode_guids) > 0 do
-      {:ok, :episodes}
-    else
-      :unmatched
+      present_guid?(left.podcast_guid) or present_guid?(right.podcast_guid) ->
+        :unmatched
+
+      match?(%MapSet{}, left.episode_guids) and left.episode_guids == right.episode_guids and
+          MapSet.size(left.episode_guids) > 0 ->
+        {:ok, :episodes}
+
+      true ->
+        :unmatched
     end
   end
+
+  defp present_guid?(guid) when is_binary(guid) and guid != "", do: true
+  defp present_guid?(_guid), do: false
 
   def library_diff(apple, spotify, snapshot, priority) do
     Bank.record({:diff, apple, spotify, snapshot, priority})
@@ -463,8 +518,8 @@ defmodule Lithium.SyncTest do
   defp credentials do
     %{
       "spotify" => %{"access_token" => "spotify-token", "refresh_token" => "refresh"},
-      "apple_music" => %{"user_token" => "music-user", "storefront" => "us"},
-      "apple_podcasts" => %{"user_token" => "podcast-user", "storefront" => "us"}
+      "apple_music" => %{"music_user_token" => "music-user", "storefront" => "us"},
+      "apple_podcasts" => %{"media_user_token" => "podcast-user", "storefront" => "us"}
     }
   end
 
@@ -741,6 +796,10 @@ defmodule Lithium.SyncTest.ApplePodcasts do
     if Bank.get(:fail_podcasts) do
       {:error, :podcasts_probe_failed}
     else
+      Bank.update(fn state ->
+        %{state | apple_shows: Enum.reject(state.apple_shows, &(&1.id == show_id))}
+      end)
+
       :ok
     end
   end

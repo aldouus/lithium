@@ -48,6 +48,8 @@ defmodule Lithium.Worker do
       Task.start(fn ->
         try do
           Lithium.Sync.run(tenant_id)
+        rescue
+          _exception -> :error
         after
           send(parent, {:sync_done, tenant_id})
         end

@@ -36,7 +36,7 @@ defmodule Lithium.Spotify.Client do
   @impl true
   def saved_shows(token, opts) when is_binary(token) and is_list(opts) do
     with {:ok, items} <- paginate(token, "/v1/me/shows", opts) do
-      {:ok, Enum.map(items, &map_show/1)}
+      {:ok, Enum.flat_map(items, &map_show/1)}
     end
   end
 
@@ -44,14 +44,14 @@ defmodule Lithium.Spotify.Client do
   def show_episodes(token, show_id, opts)
       when is_binary(token) and is_binary(show_id) and is_list(opts) do
     with {:ok, items} <- paginate(token, "/v1/shows/#{show_id}/episodes", opts) do
-      {:ok, Enum.map(items, &map_episode/1)}
+      {:ok, Enum.flat_map(items, &map_episode/1)}
     end
   end
 
   @impl true
   def playlists(token, opts) when is_binary(token) and is_list(opts) do
     with {:ok, items} <- paginate(token, "/v1/me/playlists", opts) do
-      {:ok, Enum.map(items, &map_playlist/1)}
+      {:ok, Enum.flat_map(items, &map_playlist/1)}
     end
   end
 
@@ -340,21 +340,26 @@ defmodule Lithium.Spotify.Client do
 
   defp map_track(_), do: nil
 
-  defp map_show(%{"show" => show}) when is_map(show) do
-    %{id: show["id"], name: show["name"]}
+  defp map_show(%{"show" => show}) when is_map(show), do: map_show(show)
+
+  defp map_show(%{"id" => id, "name" => name}) when is_binary(id) and is_binary(name) do
+    [%{id: id, name: name}]
   end
 
-  defp map_show(%{"id" => id, "name" => name}) do
-    %{id: id, name: name}
+  defp map_show(_), do: []
+
+  defp map_episode(%{"name" => name, "release_date" => release_date})
+       when is_binary(name) and is_binary(release_date) do
+    [%{name: name, release_date: release_date}]
   end
 
-  defp map_episode(episode) do
-    %{name: episode["name"], release_date: episode["release_date"]}
+  defp map_episode(_), do: []
+
+  defp map_playlist(%{"id" => id, "name" => name}) when is_binary(id) and is_binary(name) do
+    [%{id: id, name: name}]
   end
 
-  defp map_playlist(playlist) do
-    %{id: playlist["id"], name: playlist["name"]}
-  end
+  defp map_playlist(_), do: []
 
   defp search_items(body) when is_map(body) do
     case get_in(body, ["tracks", "items"]) do

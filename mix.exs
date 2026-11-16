@@ -24,7 +24,7 @@ defmodule Lithium.MixProject do
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
       {:jose, "~> 1.11"},
-      {:plug, "~> 1.16"}
+      {:plug, "~> 1.16", only: :test}
     ]
   end
 end

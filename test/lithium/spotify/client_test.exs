@@ -67,7 +67,10 @@ defmodule Lithium.Spotify.ClientTest do
           assert conn.query_params["limit"] == "50"
 
           respond(conn, %{
-            "items" => [%{"show" => %{"id" => "show-1", "name" => "Night"}}],
+            "items" => [
+              %{"show" => %{"id" => "show-1", "name" => "Night"}},
+              %{"show" => nil}
+            ],
             "next" => nil
           })
 

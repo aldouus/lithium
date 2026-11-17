@@ -5,7 +5,7 @@ defmodule Lithium.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [Lithium.Worker]
+    children = [Lithium.Web.Endpoint, Lithium.Worker]
     Supervisor.start_link(children, strategy: :one_for_one, name: Lithium.Supervisor)
   end
 end

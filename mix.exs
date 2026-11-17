@@ -21,7 +21,7 @@ defmodule Lithium.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:plug, "~> 1.0", only: :test},
+      {:plug, "~> 1.18", only: :test},
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
       {:jose, "~> 1.11"}

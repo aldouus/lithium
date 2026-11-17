@@ -21,8 +21,9 @@ defmodule Lithium.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:ecto, "~> 3.14"},
+      {:ecto_sqlite3, "~> 0.26"},
       {:plug, "~> 1.18", only: :test},
-      {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
       {:jose, "~> 1.11"}
     ]

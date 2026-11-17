@@ -1,26 +1,52 @@
 defmodule Lithium.Store do
   @moduledoc false
 
-  alias Exqlite.Sqlite3
+  import Ecto.Query
+
+  alias Lithium.Repo
+  alias Lithium.Store.PlaylistName
+  alias Lithium.Store.Setting
+  alias Lithium.Store.SnapshotItem
+  alias Lithium.Store.SnapshotMeta
 
   def with_conn(tenant_id, fun) when is_function(fun, 1) do
     with {:ok, _} <- Lithium.Tenant.ensure(tenant_id),
-         {:ok, path} <- Lithium.Tenant.database_path(tenant_id),
-         {:ok, conn} <- Sqlite3.open(path) do
+         {:ok, path} <- Lithium.Tenant.database_path(tenant_id) do
+      {:ok, pid} =
+        Repo.start_link(
+          name: nil,
+          database: path,
+          pool_size: 1,
+          journal_mode: :wal
+        )
+
       try do
-        :ok = Sqlite3.execute(conn, "PRAGMA journal_mode = WAL")
-        :ok = Sqlite3.execute(conn, "PRAGMA foreign_keys = ON")
-        :ok = migrate(conn)
-        {:ok, fun.(conn)}
+        previous = Repo.put_dynamic_repo(pid)
+
+        try do
+          Ecto.Migrator.run(
+            Repo,
+            [{20_261_116_000_000, Lithium.Store.Migration}],
+            :up,
+            all: true,
+            log: false
+          )
+
+          {:ok, fun.(pid)}
+        after
+          Repo.put_dynamic_repo(previous)
+        end
       after
-        Sqlite3.close(conn)
+        Supervisor.stop(pid)
       end
     end
   end
 
   def journal_mode(conn) do
-    [[mode]] = all(conn, "PRAGMA journal_mode", [])
-    mode
+    with_repo(conn, fn ->
+      {:ok, %{rows: [[mode]]}} = Repo.query("PRAGMA journal_mode")
+      mode
+    end)
   end
 
   def put_priority(conn, side) when side in [:apple, :spotify] do
@@ -65,174 +91,127 @@ defmodule Lithium.Store do
   end
 
   def put_playlist_names(conn, names) when is_list(names) do
-    :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+    with_repo(conn, fn ->
+      {:ok, :ok} =
+        Repo.transaction(
+          fn ->
+            Repo.delete_all(PlaylistName)
 
-    try do
-      :ok = Sqlite3.execute(conn, "DELETE FROM playlist_names")
+            rows =
+              names
+              |> Enum.uniq()
+              |> Enum.map(fn name when is_binary(name) -> %{name: name} end)
 
-      names
-      |> Enum.uniq()
-      |> Enum.each(fn name when is_binary(name) ->
-        run(conn, "INSERT INTO playlist_names (name) VALUES (?1)", [name])
-      end)
+            insert_all(PlaylistName, rows)
+            :ok
+          end,
+          mode: :immediate
+        )
 
-      :ok = Sqlite3.execute(conn, "COMMIT")
       :ok
-    rescue
-      exception ->
-        Sqlite3.execute(conn, "ROLLBACK")
-        reraise exception, __STACKTRACE__
-    end
-  end
-
-  def playlist_names(conn) do
-    conn
-    |> all("SELECT name FROM playlist_names ORDER BY name", [])
-    |> Enum.map(fn [name] -> name end)
-  end
-
-  def snapshot(conn, collection) when is_binary(collection) do
-    case all(conn, "SELECT taken_at FROM snapshot_meta WHERE collection = ?1", [collection]) do
-      [] ->
-        nil
-
-      [[_taken_at]] ->
-        %{
-          apple: snapshot_side(conn, collection, "apple"),
-          spotify: snapshot_side(conn, collection, "spotify")
-        }
-    end
-  end
-
-  def put_snapshot(conn, collection, apple, spotify) when is_binary(collection) do
-    :ok = Sqlite3.execute(conn, "BEGIN IMMEDIATE")
-
-    try do
-      run(conn, "DELETE FROM snapshot_items WHERE collection = ?1", [collection])
-      insert_side(conn, collection, "apple", apple)
-      insert_side(conn, collection, "spotify", spotify)
-
-      run(
-        conn,
-        "INSERT INTO snapshot_meta (collection, taken_at) VALUES (?1, ?2)
-         ON CONFLICT(collection) DO UPDATE SET taken_at = excluded.taken_at",
-        [collection, DateTime.utc_now() |> DateTime.to_iso8601()]
-      )
-
-      :ok = Sqlite3.execute(conn, "COMMIT")
-      :ok
-    rescue
-      exception ->
-        Sqlite3.execute(conn, "ROLLBACK")
-        reraise exception, __STACKTRACE__
-    end
-  end
-
-  defp snapshot_side(conn, collection, side) do
-    conn
-    |> all(
-      "SELECT item_key FROM snapshot_items WHERE collection = ?1 AND side = ?2",
-      [collection, side]
-    )
-    |> Enum.map(fn [key] -> key end)
-    |> MapSet.new()
-  end
-
-  defp insert_side(conn, collection, side, keys) do
-    Enum.each(keys, fn key when is_binary(key) ->
-      run(
-        conn,
-        "INSERT INTO snapshot_items (collection, side, item_key) VALUES (?1, ?2, ?3)",
-        [collection, side, key]
-      )
     end)
   end
 
-  defp put_setting(conn, key, value) do
-    run(
-      conn,
-      "INSERT INTO settings (key, value) VALUES (?1, ?2)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      [key, value]
-    )
+  def playlist_names(conn) do
+    with_repo(conn, fn ->
+      Repo.all(from(name in PlaylistName, order_by: [asc: name.name], select: name.name))
+    end)
+  end
 
-    :ok
+  def snapshot(conn, collection) when is_binary(collection) do
+    with_repo(conn, fn ->
+      case Repo.get(SnapshotMeta, collection) do
+        nil ->
+          nil
+
+        _meta ->
+          %{
+            apple: snapshot_side(collection, "apple"),
+            spotify: snapshot_side(collection, "spotify")
+          }
+      end
+    end)
+  end
+
+  def put_snapshot(conn, collection, apple, spotify) when is_binary(collection) do
+    taken_at = DateTime.utc_now()
+
+    with_repo(conn, fn ->
+      {:ok, :ok} =
+        Repo.transaction(
+          fn ->
+            Repo.delete_all(from(item in SnapshotItem, where: item.collection == ^collection))
+            insert_side(collection, "apple", apple)
+            insert_side(collection, "spotify", spotify)
+
+            Repo.insert!(
+              %SnapshotMeta{collection: collection, taken_at: taken_at},
+              on_conflict: [set: [taken_at: taken_at]],
+              conflict_target: [:collection]
+            )
+
+            :ok
+          end,
+          mode: :immediate
+        )
+
+      :ok
+    end)
+  end
+
+  defp snapshot_side(collection, side) do
+    Repo.all(
+      from(item in SnapshotItem,
+        where: item.collection == ^collection and item.side == ^side,
+        select: item.item_key
+      )
+    )
+    |> MapSet.new()
+  end
+
+  defp insert_side(collection, side, keys) do
+    rows =
+      Enum.map(keys, fn key when is_binary(key) ->
+        %{collection: collection, side: side, item_key: key}
+      end)
+
+    insert_all(SnapshotItem, rows)
+  end
+
+  defp insert_all(_schema, []), do: {0, nil}
+
+  defp insert_all(schema, rows) do
+    Repo.insert_all(schema, rows)
+  end
+
+  defp put_setting(conn, key, value) do
+    with_repo(conn, fn ->
+      Repo.insert!(
+        %Setting{key: key, value: value},
+        on_conflict: [set: [value: value]],
+        conflict_target: [:key]
+      )
+
+      :ok
+    end)
   end
 
   defp get_setting(conn, key) do
-    case all(conn, "SELECT value FROM settings WHERE key = ?1", [key]) do
-      [[value]] -> value
-      [] -> nil
-    end
-  end
-
-  defp migrate(conn) do
-    :ok =
-      Sqlite3.execute(conn, """
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-      """)
-
-    :ok =
-      Sqlite3.execute(conn, """
-      CREATE TABLE IF NOT EXISTS playlist_names (
-        name TEXT PRIMARY KEY
-      )
-      """)
-
-    :ok =
-      Sqlite3.execute(conn, """
-      CREATE TABLE IF NOT EXISTS snapshot_meta (
-        collection TEXT PRIMARY KEY,
-        taken_at TEXT NOT NULL
-      )
-      """)
-
-    :ok =
-      Sqlite3.execute(conn, """
-      CREATE TABLE IF NOT EXISTS snapshot_items (
-        collection TEXT NOT NULL,
-        side TEXT NOT NULL,
-        item_key TEXT NOT NULL,
-        PRIMARY KEY (collection, side, item_key)
-      )
-      """)
-
-    :ok
-  end
-
-  defp run(conn, sql, args) do
-    {:ok, statement} = Sqlite3.prepare(conn, sql)
-
-    try do
-      :ok = Sqlite3.bind(statement, args)
-
-      case Sqlite3.step(conn, statement) do
-        :done -> :ok
-        {:row, _row} -> :ok
+    with_repo(conn, fn ->
+      case Repo.get(Setting, key) do
+        nil -> nil
+        setting -> setting.value
       end
-    after
-      Sqlite3.release(conn, statement)
-    end
+    end)
   end
 
-  defp all(conn, sql, args) do
-    {:ok, statement} = Sqlite3.prepare(conn, sql)
+  defp with_repo(conn, fun) do
+    previous = Repo.put_dynamic_repo(conn)
 
     try do
-      :ok = Sqlite3.bind(statement, args)
-      collect(conn, statement, [])
+      fun.()
     after
-      Sqlite3.release(conn, statement)
-    end
-  end
-
-  defp collect(conn, statement, acc) do
-    case Sqlite3.step(conn, statement) do
-      {:row, row} -> collect(conn, statement, [row | acc])
-      :done -> Enum.reverse(acc)
+      Repo.put_dynamic_repo(previous)
     end
   end
 end

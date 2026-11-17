@@ -23,7 +23,11 @@ defmodule Lithium.MixProject do
       {:req, "~> 0.5"},
       {:ecto, "~> 3.14"},
       {:ecto_sqlite3, "~> 0.26"},
-      {:plug, "~> 1.18", only: :test},
+      {:phoenix, "~> 1.8"},
+      {:bandit, "~> 1.5"},
+      {:guardian, "~> 2.5"},
+      {:resend, "~> 0.4.5"},
+      {:oauth2, "~> 2.1"},
       {:jason, "~> 1.4"},
       {:jose, "~> 1.11"}
     ]

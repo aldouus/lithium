@@ -5,7 +5,8 @@ defmodule Lithium.Web.Endpoint do
     store: :cookie,
     key: "_lithium_session",
     signing_salt: "lithium-session",
-    same_site: "Lax"
+    same_site: "Lax",
+    max_age: 30 * 24 * 60 * 60
   ]
 
   plug(Plug.Parsers,

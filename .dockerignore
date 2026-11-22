@@ -1,0 +1,10 @@
+_build
+deps
+.git
+.elixir_ls
+.env
+*.p8
+test
+cover
+doc
+tmp

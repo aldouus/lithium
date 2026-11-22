@@ -24,3 +24,6 @@ erl_crash.dump
 lithium-*.tar
 
 /.elixir_ls/
+
+.env
+*.p8

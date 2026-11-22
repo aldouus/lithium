@@ -34,7 +34,8 @@ defmodule Lithium.Spotify.OAuth do
       site: "https://api.spotify.com",
       authorize_url: "https://accounts.spotify.com/authorize",
       token_url: "https://accounts.spotify.com/api/token",
-      redirect_uri: redirect_uri
+      redirect_uri: redirect_uri,
+      serializers: %{"application/json" => Jason}
     )
   end
 
@@ -45,7 +46,7 @@ defmodule Lithium.Spotify.OAuth do
   def get_token(client, params, headers) do
     client
     |> put_header("accept", "application/json")
-    |> put_header("authorization", authorization_header(client))
+    |> put_header("content-type", "application/x-www-form-urlencoded")
     |> OAuth2.Strategy.AuthCode.get_token(params, headers)
   end
 
@@ -61,10 +62,6 @@ defmodule Lithium.Spotify.OAuth do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp authorization_header(client) do
-    "Basic " <> Base.encode64("#{client.client_id}:#{client.client_secret}")
   end
 
   defp present?(value) when is_binary(value) and value != "", do: true

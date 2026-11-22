@@ -58,6 +58,7 @@ defmodule Lithium.Web.SessionController do
 
   defp render_home(conn, assigns) do
     user = Guardian.Plug.current_resource(conn)
+    credentials = credentials(user)
 
     body =
       Lithium.Web.Page.home(%{
@@ -65,18 +66,23 @@ defmodule Lithium.Web.SessionController do
         notice: assigns[:notice],
         error: assigns[:error],
         spotify_configured: Lithium.Spotify.OAuth.configured?(),
-        spotify_connected: user && spotify_connected?(user.tenant_id)
+        spotify_connected: connected?(credentials, "spotify", "refresh_token"),
+        apple_music_configured: Lithium.AppleToken.configured?(),
+        apple_music_connected: connected?(credentials, "apple_music", "music_user_token"),
+        apple_podcasts_connected: connected?(credentials, "apple_podcasts", "media_user_token")
       })
 
+    content_type = if String.contains?(body, "<"), do: "text/html", else: "text/plain"
+
     conn
-    |> put_resp_content_type("text/html")
+    |> put_resp_content_type(content_type)
     |> send_resp(200, body)
   end
 
   defp magic_token(email) do
     Lithium.Web.Auth.encode_and_sign(%{email: email}, %{},
       token_type: "magic",
-      ttl: {20, :minutes}
+      ttl: {2, :hours}
     )
   end
 
@@ -96,13 +102,16 @@ defmodule Lithium.Web.SessionController do
 
   defp normalize_email(_email), do: {:error, :invalid_email}
 
-  defp spotify_connected?(tenant_id) do
-    case Lithium.Credentials.read(tenant_id) do
-      {:ok, credentials} ->
-        match?({:ok, _token}, Lithium.Credentials.token(credentials, "spotify", "refresh_token"))
+  defp credentials(nil), do: %{}
 
-      _ ->
-        false
+  defp credentials(user) do
+    case Lithium.Credentials.read(user.tenant_id) do
+      {:ok, credentials} -> credentials
+      _ -> %{}
     end
+  end
+
+  defp connected?(credentials, service, field) do
+    match?({:ok, _token}, Lithium.Credentials.token(credentials, service, field))
   end
 end

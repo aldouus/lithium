@@ -1,6 +1,8 @@
 defmodule Lithium.Web.SpotifyController do
   use Phoenix.Controller, formats: [:html]
 
+  require Logger
+
   import Plug.Conn
 
   def connect(conn, _params) do
@@ -43,11 +45,13 @@ defmodule Lithium.Web.SpotifyController do
               |> delete_session(:spotify_redirect_uri)
               |> redirect(to: "/?notice=spotify")
 
-            _error ->
+            {:error, reason} ->
+              Logger.warning("spotify credentials were not saved: #{inspect(reason)}")
               fail(conn)
           end
 
-        _error ->
+        {:error, reason} ->
+          Logger.warning("spotify token exchange failed: #{inspect(reason)}")
           fail(conn)
       end
     else

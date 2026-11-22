@@ -30,5 +30,10 @@ defmodule Lithium.Web.Router do
 
     get("/spotify", SpotifyController, :connect)
     get("/spotify/callback", SpotifyController, :callback)
+    get("/apple/music", AppleMusicController, :show)
+    get("/apple/music/token", AppleMusicController, :token)
+    post("/apple/music", AppleMusicController, :create)
+    get("/apple/podcasts", ApplePodcastsController, :show)
+    post("/apple/podcasts", ApplePodcastsController, :create)
   end
 end

@@ -53,6 +53,10 @@ defmodule Lithium.Accounts do
     with_repo(fn -> Repo.get(User, id) end)
   end
 
+  def get_by_tenant_id(tenant_id) when is_binary(tenant_id) do
+    with_repo(fn -> Repo.get_by(User, tenant_id: tenant_id) end)
+  end
+
   def consume_jti(jti) when is_binary(jti) do
     with_repo(fn ->
       now = DateTime.utc_now()

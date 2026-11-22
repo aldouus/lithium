@@ -69,7 +69,7 @@ defmodule Lithium.Sync do
   defp http_opts(opts), do: Keyword.drop(opts, @option_keys)
 
   defp spotify_session(tenant_id, credentials, spotify, http) do
-    case spotify.access_token(credentials, http) do
+    case Lithium.Reconnect.note(tenant_id, :spotify, spotify.access_token(credentials, http)) do
       {:ok, token, refreshed} when is_binary(token) and is_map(refreshed) ->
         :ok = write_credentials(tenant_id, refreshed)
         {:ok, token, refreshed}
@@ -157,10 +157,12 @@ defmodule Lithium.Sync do
     apple =
       load_songs(
         fn -> ctx.apple_music.favorites(ctx.music_token, ctx.storefront, ctx.http) end,
-        ctx
+        ctx,
+        :apple_music
       )
 
-    spotify = load_songs(fn -> ctx.spotify.liked_songs(ctx.spotify_token, ctx.http) end, ctx)
+    spotify =
+      load_songs(fn -> ctx.spotify.liked_songs(ctx.spotify_token, ctx.http) end, ctx, :spotify)
 
     case diff_sets(ctx, side_keys(apple), side_keys(spotify), "favorites") do
       {:skipped, reason} ->
@@ -221,10 +223,12 @@ defmodule Lithium.Sync do
     apple =
       load_songs(
         fn -> ctx.apple_music.favorites(ctx.music_token, ctx.storefront, ctx.http) end,
-        ctx
+        ctx,
+        :apple_music
       )
 
-    spotify = load_songs(fn -> ctx.spotify.liked_songs(ctx.spotify_token, ctx.http) end, ctx)
+    spotify =
+      load_songs(fn -> ctx.spotify.liked_songs(ctx.spotify_token, ctx.http) end, ctx, :spotify)
 
     case {apple, spotify} do
       {{:ok, apple_keys, _}, {:ok, spotify_keys, _}} ->
@@ -257,8 +261,18 @@ defmodule Lithium.Sync do
   end
 
   defp current_shows(ctx) do
-    with {:ok, spotify_shows} <- ctx.spotify.saved_shows(ctx.spotify_token, ctx.http),
-         {:ok, apple_shows} <- ctx.apple_podcasts.followed_shows(ctx.podcasts_token, ctx.http),
+    with {:ok, spotify_shows} <-
+           Lithium.Reconnect.note(
+             ctx.tenant_id,
+             :spotify,
+             ctx.spotify.saved_shows(ctx.spotify_token, ctx.http)
+           ),
+         {:ok, apple_shows} <-
+           Lithium.Reconnect.note(
+             ctx.tenant_id,
+             :apple_podcasts,
+             ctx.apple_podcasts.followed_shows(ctx.podcasts_token, ctx.http)
+           ),
          {:ok, apple_keys, spotify_keys, apple_index, spotify_index} <-
            match_shows(ctx, spotify_shows, apple_shows) do
       {:ok, apple_keys, spotify_keys, apple_index, spotify_index}
@@ -516,19 +530,29 @@ defmodule Lithium.Sync do
 
   defp sync_playlist(ctx, name) do
     with {:ok, apple_id} when is_binary(apple_id) <-
-           ctx.apple_music.ensure_playlist(ctx.music_token, name, ctx.http),
+           Lithium.Reconnect.note(
+             ctx.tenant_id,
+             :apple_music,
+             ctx.apple_music.ensure_playlist(ctx.music_token, name, ctx.http)
+           ),
          {:ok, spotify_id} when is_binary(spotify_id) <-
-           ctx.spotify.ensure_playlist(ctx.spotify_token, name, ctx.http) do
+           Lithium.Reconnect.note(
+             ctx.tenant_id,
+             :spotify,
+             ctx.spotify.ensure_playlist(ctx.spotify_token, name, ctx.http)
+           ) do
       apple =
         load_songs(
           fn -> ctx.apple_music.playlist_tracks(ctx.music_token, apple_id, ctx.http) end,
-          ctx
+          ctx,
+          :apple_music
         )
 
       spotify =
         load_songs(
           fn -> ctx.spotify.playlist_tracks(ctx.spotify_token, spotify_id, ctx.http) end,
-          ctx
+          ctx,
+          :spotify
         )
 
       case diff_sets(ctx, side_keys(apple), side_keys(spotify), "playlist:" <> name) do
@@ -609,13 +633,15 @@ defmodule Lithium.Sync do
     apple =
       load_songs(
         fn -> ctx.apple_music.playlist_tracks(ctx.music_token, apple_id, ctx.http) end,
-        ctx
+        ctx,
+        :apple_music
       )
 
     spotify =
       load_songs(
         fn -> ctx.spotify.playlist_tracks(ctx.spotify_token, spotify_id, ctx.http) end,
-        ctx
+        ctx,
+        :spotify
       )
 
     case {apple, spotify} do
@@ -663,8 +689,8 @@ defmodule Lithium.Sync do
     end
   end
 
-  defp load_songs(loader, ctx) do
-    case loader.() do
+  defp load_songs(loader, ctx, service) do
+    case Lithium.Reconnect.note(ctx.tenant_id, service, loader.()) do
       {:ok, tracks} when is_list(tracks) ->
         {keys, index} = index_tracks(tracks, ctx.song_key)
         {:ok, keys, index}

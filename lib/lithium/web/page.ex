@@ -126,11 +126,8 @@ defmodule Lithium.Web.Page do
 
   defp notice("sent"), do: "<p>Check your email for a sign-in link.</p>"
   defp notice("invalid"), do: "<p>That sign-in link is no longer valid.</p>"
-  defp notice("spotify"), do: "<p>Spotify is connected.</p>"
   defp notice("spotify_failed"), do: "<p>Spotify could not be connected.</p>"
-  defp notice("apple_music"), do: "<p>Apple Music is connected.</p>"
   defp notice("apple_music_failed"), do: "<p>Apple Music could not be connected.</p>"
-  defp notice("apple_podcasts"), do: "<p>Apple Podcasts is connected.</p>"
   defp notice("apple_podcasts_failed"), do: "<p>Apple Podcasts could not be connected.</p>"
   defp notice(_), do: ""
 

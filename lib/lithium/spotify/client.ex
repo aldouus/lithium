@@ -212,7 +212,10 @@ defmodule Lithium.Spotify.Client do
       base_url: @api_base,
       auth: {:bearer, token},
       plug: opts[:plug],
-      retry: false
+      # Search and library writes share one budget. A 429 waits for Retry-After
+      # instead of failing the song or the batch.
+      retry: :transient,
+      max_retries: 10
     )
   end
 

@@ -214,8 +214,9 @@ defmodule Lithium.Sync do
 
   defp add_spotify_tracks(ctx, keys) do
     case resolve_spotify_ids(ctx, keys) do
-      [] -> :ok
-      ids -> ctx.spotify.save_tracks(ctx.spotify_token, ids, ctx.http)
+      {:ok, []} -> :ok
+      {:ok, ids} -> ctx.spotify.save_tracks(ctx.spotify_token, ids, ctx.http)
+      {:error, _} = error -> error
     end
   end
 
@@ -624,8 +625,9 @@ defmodule Lithium.Sync do
 
   defp add_spotify_playlist_tracks(ctx, playlist_id, keys) do
     case resolve_spotify_ids(ctx, keys) do
-      [] -> :ok
-      ids -> ctx.spotify.add_playlist_tracks(ctx.spotify_token, playlist_id, ids, ctx.http)
+      {:ok, []} -> :ok
+      {:ok, ids} -> ctx.spotify.add_playlist_tracks(ctx.spotify_token, playlist_id, ids, ctx.http)
+      {:error, _} = error -> error
     end
   end
 
@@ -742,14 +744,17 @@ defmodule Lithium.Sync do
   defp resolve_spotify_ids(ctx, keys) do
     keys
     |> each_key()
-    |> Enum.map(fn isrc ->
+    |> Enum.reduce_while({:ok, []}, fn isrc, {:ok, ids} ->
       case ctx.spotify.search_track(ctx.spotify_token, isrc, ctx.http) do
-        {:ok, %{id: id}} when is_binary(id) and id != "" -> id
-        _ -> nil
+        {:ok, %{id: id}} when is_binary(id) and id != "" -> {:cont, {:ok, [id | ids]}}
+        {:ok, _} -> {:cont, {:ok, ids}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
+    |> case do
+      {:ok, ids} -> {:ok, Enum.uniq(Enum.reverse(ids))}
+      {:error, _} = error -> error
+    end
   end
 
   defp reference_for(key, primary, fallback) do

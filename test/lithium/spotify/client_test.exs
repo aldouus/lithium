@@ -221,6 +221,26 @@ defmodule Lithium.Spotify.ClientTest do
              Client.search_track("secret", "USRC17607839", plug: plug)
   end
 
+  test "retries a rate limited search and keeps the matching track" do
+    plug = fn conn ->
+      calls = Process.get(:rate_calls, 0)
+      Process.put(:rate_calls, calls + 1)
+
+      if calls == 0 do
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "0")
+        |> respond(429, %{"error" => %{"status" => 429, "message" => "API rate limit exceeded"}})
+      else
+        respond(conn, %{
+          "tracks" => %{"items" => [track("match", "USRC17607839", "Right", 20)]}
+        })
+      end
+    end
+
+    assert {:ok, %{id: "match", isrc: "USRC17607839", album: "Right", duration_ms: 20}} =
+             Client.search_track("secret", "USRC17607839", plug: plug)
+  end
+
   test "returns nil when every search hit has a different ISRC" do
     plug = fn conn ->
       assert conn.query_params["q"] == "isrc:USRC17607839"

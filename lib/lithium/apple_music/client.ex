@@ -290,7 +290,7 @@ defmodule Lithium.AppleMusic.Client do
 
   defp library_track(song, included) do
     catalog_id = catalog_id(song)
-    attributes = catalog_attributes(included, catalog_id)
+    attributes = catalog_attributes(song, included, catalog_id)
 
     %{
       id: catalog_id || song["id"],
@@ -318,9 +318,20 @@ defmodule Lithium.AppleMusic.Client do
   defp present_id(id) when is_binary(id) and id != "", do: id
   defp present_id(_), do: nil
 
-  defp catalog_attributes(_included, nil), do: %{}
+  defp catalog_attributes(song, included, id) do
+    Map.merge(inline_catalog_attributes(song), included_attributes(included, id))
+  end
 
-  defp catalog_attributes(included, id) do
+  defp inline_catalog_attributes(song) do
+    case get_in(song, ["relationships", "catalog", "data"]) do
+      [%{"attributes" => attributes} | _] when is_map(attributes) -> attributes
+      _ -> %{}
+    end
+  end
+
+  defp included_attributes(_included, nil), do: %{}
+
+  defp included_attributes(included, id) do
     case included do
       %{^id => %{"attributes" => attributes}} when is_map(attributes) -> attributes
       _ -> %{}

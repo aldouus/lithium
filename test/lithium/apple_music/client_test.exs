@@ -114,6 +114,40 @@ defmodule Lithium.AppleMusic.ClientTest do
            ]
   end
 
+  test "reads an ISRC embedded on the catalog relationship" do
+    plug = fn conn ->
+      json(conn, %{
+        "data" => [
+          %{
+            "id" => "lib.1",
+            "attributes" => %{"inFavorites" => true},
+            "relationships" => %{
+              "catalog" => %{
+                "data" => [
+                  %{
+                    "id" => "cat.1",
+                    "type" => "songs",
+                    "attributes" => %{
+                      "isrc" => "USRC17607839",
+                      "albumName" => "Night",
+                      "durationInMillis" => 210_000
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      })
+    end
+
+    assert {:ok, tracks} = Client.favorites("user-token", "us", plug: plug)
+
+    assert tracks == [
+             %{id: "cat.1", isrc: "USRC17607839", album: "Night", duration_ms: 210_000}
+           ]
+  end
+
   test "adds favorites in chunks and accepts 202" do
     parent = self()
 

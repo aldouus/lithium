@@ -135,6 +135,7 @@ defmodule Lithium.Spotify.ClientTest do
       assert conn.method == "PUT"
       assert conn.request_path == "/v1/me/library"
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer secret"]
+      assert {_adapter, %{raw_body: ""}} = conn.adapter
       send(parent, {:uris, conn.query_params["uris"]})
       respond(conn, %{})
     end
@@ -170,6 +171,7 @@ defmodule Lithium.Spotify.ClientTest do
     plug = fn conn ->
       assert conn.method == "DELETE"
       assert conn.request_path == "/v1/me/library"
+      assert {_adapter, %{raw_body: ""}} = conn.adapter
       send(parent, {:uris, conn.query_params["uris"]})
       respond(conn, %{})
     end

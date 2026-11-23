@@ -6,10 +6,12 @@ defmodule Lithium.AppleMusic do
 
   Reads use `https://api.music.apple.com` with `Authorization: Bearer` set to
   `Lithium.AppleToken.developer_token/0` and `Music-User-Token` set to the
-  tenant token. Favorites are library songs whose `inFavorites` extension is
-  true. Resolve each favorite through its catalog relationship, using the
-  attributes embedded on that relationship or the matching `included` song,
-  so the song carries `isrc`, album name, and `durationInMillis`.
+  tenant token. Favorites are the tracks in the system Favorite Songs
+  playlist, which is where Apple Music sends starred songs. That playlist is
+  the library playlist named Favorite Songs with `canEdit` false. Resolve each
+  track through its catalog relationship, using the attributes embedded on
+  that relationship or the matching `included` song, so the song carries
+  `isrc`, album name, and `durationInMillis`.
 
   `POST /v1/me/favorites?ids[songs]=` adds a favorite. `DELETE` on that same
   path with the same query removes one. The delete is not in Apple's published

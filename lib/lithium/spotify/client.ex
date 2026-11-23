@@ -127,7 +127,9 @@ defmodule Lithium.Spotify.Client do
     |> Enum.reduce_while(:ok, fn chunk, :ok ->
       uris = Enum.map_join(chunk, ",", &"spotify:#{type}:#{&1}")
 
-      case request(token, method, "/v1/me/library", [params: [uris: uris]], opts) do
+      # Spotify's load balancer rejects a PUT or DELETE that has no body and
+      # no Content-Length, with an HTML 411 that says the request was a POST.
+      case request(token, method, "/v1/me/library", [params: [uris: uris], body: ""], opts) do
         {:ok, _} -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end

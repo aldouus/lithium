@@ -13,9 +13,8 @@ defmodule Lithium.AppleMusic.Client do
   @impl true
   def favorites(user_token, _storefront, opts) do
     with {:ok, token} <- Lithium.AppleToken.developer_token(),
-         {:ok, pages} <-
-           pages(token, user_token, "/v1/me/library/songs", song_params(), opts) do
-      {:ok, Enum.flat_map(pages, &favorite_tracks/1)}
+         {:ok, playlist_id} <- favorite_songs_id(token, user_token, opts) do
+      playlist_tracks(user_token, playlist_id, opts)
     end
   end
 
@@ -117,8 +116,23 @@ defmodule Lithium.AppleMusic.Client do
     end
   end
 
-  defp song_params do
-    [extend: "inFavorites", include: "catalog", limit: @page_limit]
+  defp favorite_songs_id(token, user_token, opts) do
+    with {:ok, pages} <-
+           pages(token, user_token, "/v1/me/library/playlists", [limit: @page_limit], opts) do
+      pages
+      |> Enum.flat_map(&data/1)
+      |> Enum.find_value({:error, :missing_favorites_playlist}, &starred_playlist/1)
+    end
+  end
+
+  defp starred_playlist(playlist) do
+    name = get_in(playlist, ["attributes", "name"])
+    editable = get_in(playlist, ["attributes", "canEdit"]) == true
+    id = playlist["id"]
+
+    if name == "Favorite Songs" and not editable and is_binary(id) and id != "" do
+      {:ok, id}
+    end
   end
 
   defp pages(token, user_token, path, params, opts, acc \\ []) do
@@ -129,7 +143,7 @@ defmodule Lithium.AppleMusic.Client do
             {:ok, Enum.reverse([body | acc])}
 
           {next_path, next_params} ->
-            pages(token, user_token, next_path, next_params, opts, [body | acc])
+            pages(token, user_token, next_path, keep_query(params, next_params), opts, [body | acc])
         end
 
       error ->
@@ -148,6 +162,18 @@ defmodule Lithium.AppleMusic.Client do
   end
 
   defp next_target(_), do: nil
+
+  # Apple's next link only carries the offset, so extend and include would
+  # otherwise disappear and later pages would all look unfavorited.
+  defp keep_query(params, next_params) do
+    Map.merge(query_map(params), query_map(next_params))
+  end
+
+  defp query_map(params) when is_map(params), do: params
+
+  defp query_map(params) when is_list(params) do
+    Map.new(params, fn {key, value} -> {to_string(key), value} end)
+  end
 
   defp favorite_ids(token, user_token, ids, method, opts) do
     ids
@@ -249,15 +275,6 @@ defmodule Lithium.AppleMusic.Client do
 
   defp decode(_), do: %{}
 
-  defp favorite_tracks(body) do
-    included = included_by_id(body)
-
-    body
-    |> data()
-    |> Enum.filter(&in_favorites?/1)
-    |> Enum.map(&library_track(&1, included))
-  end
-
   defp library_tracks(body) do
     included = included_by_id(body)
     Enum.map(data(body), &library_track(&1, included))
@@ -343,8 +360,4 @@ defmodule Lithium.AppleMusic.Client do
   end
 
   defp data(body), do: body["data"] || []
-
-  defp in_favorites?(song) do
-    get_in(song, ["attributes", "inFavorites"]) == true
-  end
 end

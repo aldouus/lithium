@@ -29,7 +29,7 @@ defmodule Lithium.AppleMusic.ClientTest do
     :ok
   end
 
-  test "maps an inFavorites song through its included catalog song" do
+  test "reads the system Favorite Songs playlist across pages" do
     plug = fn conn ->
       assert conn.host == "api.music.apple.com"
       assert conn.method == "GET"
@@ -37,15 +37,30 @@ defmodule Lithium.AppleMusic.ClientTest do
       assert bearer?(conn)
 
       cond do
+        conn.request_path == "/v1/me/library/playlists" ->
+          json(conn, %{
+            "data" => [
+              %{
+                "id" => "p.mine",
+                "attributes" => %{"name" => "Favorite Songs", "canEdit" => true}
+              },
+              %{
+                "id" => "p.fav",
+                "attributes" => %{"name" => "Favorite Songs", "canEdit" => false}
+              }
+            ]
+          })
+
         conn.query_params["offset"] == "100" ->
+          assert conn.request_path == "/v1/me/library/playlists/p.fav/tracks"
+          assert conn.query_params["include"] == "catalog"
+          assert conn.query_params["limit"] == "100"
+
           json(conn, %{
             "data" => [
               %{
                 "id" => "lib.3",
-                "attributes" => %{
-                  "inFavorites" => true,
-                  "playParams" => %{"catalogId" => "cat.3"}
-                }
+                "attributes" => %{"playParams" => %{"catalogId" => "cat.3"}}
               }
             ],
             "included" => [
@@ -62,33 +77,22 @@ defmodule Lithium.AppleMusic.ClientTest do
           })
 
         true ->
-          assert conn.request_path == "/v1/me/library/songs"
-          assert conn.query_params["extend"] == "inFavorites"
+          assert conn.request_path == "/v1/me/library/playlists/p.fav/tracks"
           assert conn.query_params["include"] == "catalog"
           assert conn.query_params["limit"] == "100"
 
           json(conn, %{
-            "next" => "/v1/me/library/songs?offset=100",
+            "next" => "/v1/me/library/playlists/p.fav/tracks?offset=100",
             "data" => [
               %{
                 "id" => "lib.1",
                 "type" => "library-songs",
-                "attributes" => %{
-                  "inFavorites" => true,
-                  "playParams" => %{"catalogId" => "other"}
-                },
+                "attributes" => %{"playParams" => %{"catalogId" => "other"}},
                 "relationships" => %{
                   "catalog" => %{"data" => [%{"id" => "cat.1", "type" => "songs"}]}
                 }
               },
-              %{
-                "id" => "lib.skip",
-                "attributes" => %{"inFavorites" => false}
-              },
-              %{
-                "id" => "lib.only",
-                "attributes" => %{"inFavorites" => true}
-              }
+              %{"id" => "lib.only", "attributes" => %{}}
             ],
             "included" => [
               %{
@@ -116,29 +120,38 @@ defmodule Lithium.AppleMusic.ClientTest do
 
   test "reads an ISRC embedded on the catalog relationship" do
     plug = fn conn ->
-      json(conn, %{
-        "data" => [
-          %{
-            "id" => "lib.1",
-            "attributes" => %{"inFavorites" => true},
-            "relationships" => %{
-              "catalog" => %{
-                "data" => [
-                  %{
-                    "id" => "cat.1",
-                    "type" => "songs",
-                    "attributes" => %{
-                      "isrc" => "USRC17607839",
-                      "albumName" => "Night",
-                      "durationInMillis" => 210_000
+      if conn.request_path == "/v1/me/library/playlists" do
+        json(conn, %{
+          "data" => [
+            %{"id" => "p.fav", "attributes" => %{"name" => "Favorite Songs", "canEdit" => false}}
+          ]
+        })
+      else
+        assert conn.request_path == "/v1/me/library/playlists/p.fav/tracks"
+
+        json(conn, %{
+          "data" => [
+            %{
+              "id" => "lib.1",
+              "relationships" => %{
+                "catalog" => %{
+                  "data" => [
+                    %{
+                      "id" => "cat.1",
+                      "type" => "songs",
+                      "attributes" => %{
+                        "isrc" => "USRC17607839",
+                        "albumName" => "Night",
+                        "durationInMillis" => 210_000
+                      }
                     }
-                  }
-                ]
+                  ]
+                }
               }
             }
-          }
-        ]
-      })
+          ]
+        })
+      end
     end
 
     assert {:ok, tracks} = Client.favorites("user-token", "us", plug: plug)
@@ -146,6 +159,16 @@ defmodule Lithium.AppleMusic.ClientTest do
     assert tracks == [
              %{id: "cat.1", isrc: "USRC17607839", album: "Night", duration_ms: 210_000}
            ]
+  end
+
+  test "errors when the system Favorite Songs playlist is absent" do
+    plug = fn conn ->
+      assert conn.request_path == "/v1/me/library/playlists"
+      json(conn, %{"data" => []})
+    end
+
+    assert Client.favorites("user-token", "us", plug: plug) ==
+             {:error, :missing_favorites_playlist}
   end
 
   test "adds favorites in chunks and accepts 202" do

@@ -6,7 +6,8 @@ defmodule Lithium.Spotify.Client do
   @api_base "https://api.spotify.com"
   @accounts_base "https://accounts.spotify.com"
   @page_size 50
-  @library_chunk 50
+  # PUT and DELETE /v1/me/library accept at most 40 URIs.
+  @library_chunk 40
   @playlist_chunk 100
 
   @doc """

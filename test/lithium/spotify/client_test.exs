@@ -146,7 +146,7 @@ defmodule Lithium.Spotify.ClientTest do
     assert_received {:uris, "spotify:track:abc,spotify:track:def"}
   end
 
-  test "chunks library saves by 50" do
+  test "chunks library saves by 40" do
     parent = self()
 
     plug = fn conn ->
@@ -154,14 +154,14 @@ defmodule Lithium.Spotify.ClientTest do
       respond(conn, %{})
     end
 
-    ids = Enum.map(1..51, &"t#{&1}")
+    ids = Enum.map(1..41, &"t#{&1}")
     assert :ok = Client.save_tracks("secret", ids, plug: plug)
 
     assert_received {:uris, first}
     assert_received {:uris, second}
     refute_received {:uris, _}
-    assert length(String.split(first, ",")) == 50
-    assert second == "spotify:track:t51"
+    assert length(String.split(first, ",")) == 40
+    assert second == "spotify:track:t41"
   end
 
   test "removes tracks and shows with the same library query" do

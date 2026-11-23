@@ -65,11 +65,47 @@ defmodule Lithium.SyncTest do
              {:ok, %{favorites: :ok, shows: :ok, playlists: :ok}}
 
     assert Enum.count(calls(), &(&1 == {:search_track, "USMISS"})) == 2
+    assert Enum.count(calls(), &(&1 == {:search_track, "USAAA1"})) == 1
 
     assert Enum.any?(Bank.get(:apple_favorites), &(&1.id == "ax"))
     assert Enum.any?(Bank.get(:spotify_liked), &(&1.id == "sx"))
     refute Enum.any?(Bank.get(:spotify_liked), &(&1.id == "s3"))
     assert_scheduled(3600)
+  end
+
+  test "a cached spotify id is saved without another search" do
+    write_credentials()
+
+    {:ok, :ok} =
+      Lithium.Store.with_conn("ada", fn conn ->
+        Lithium.Store.remember_spotify_ids(conn, [{"usaaa1", "s1"}])
+      end)
+
+    Bank.seed(%{
+      apple_favorites: [track("a1", "USAAA1")],
+      spotify_liked: [],
+      search: %{"USAAA1" => track("other", "USAAA1")}
+    })
+
+    assert {:ok, %{favorites: :ok}} = Lithium.sync("ada", test_opts())
+    refute Enum.any?(calls(), &match?({:search_track, _}, &1))
+    assert {:save_tracks, ["s1"]} in calls()
+  end
+
+  test "a long spotify rate limit waits out the window" do
+    write_credentials()
+
+    Bank.seed(%{
+      apple_favorites: [track("a1", "USAAA1")],
+      spotify_liked: [],
+      search: %{"USAAA1" => {:error, {:spotify_rate_limit, 9_000}}}
+    })
+
+    assert {:ok, %{favorites: {:error, {:spotify_rate_limit, 9_000}}}} =
+             Lithium.sync("ada", test_opts())
+
+    refute Enum.any?(calls(), &match?({:save_tracks, _}, &1))
+    assert_scheduled(9_000)
   end
 
   test "a removal wins when apple dropped a song spotify added" do
@@ -701,7 +737,11 @@ defmodule Lithium.SyncTest.Spotify do
 
   def search_track(_token, isrc, _opts) do
     Bank.record({:search_track, isrc})
-    {:ok, Map.get(Bank.get(:search), isrc)}
+
+    case Map.get(Bank.get(:search), isrc) do
+      {:error, reason} -> {:error, reason}
+      track -> {:ok, track}
+    end
   end
 
   defp playlist(playlists, playlist_id) do

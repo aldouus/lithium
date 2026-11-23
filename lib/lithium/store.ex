@@ -8,6 +8,7 @@ defmodule Lithium.Store do
   alias Lithium.Store.Setting
   alias Lithium.Store.SnapshotItem
   alias Lithium.Store.SnapshotMeta
+  alias Lithium.Store.SpotifyId
 
   def with_conn(tenant_id, fun) when is_function(fun, 1) do
     with {:ok, _} <- Lithium.Tenant.ensure(tenant_id),
@@ -26,7 +27,10 @@ defmodule Lithium.Store do
         try do
           Ecto.Migrator.run(
             Repo,
-            [{20_261_116_000_000, Lithium.Store.Migration}],
+            [
+              {20_261_116_000_000, Lithium.Store.Migration},
+              {20_261_123_000_000, Lithium.Store.SpotifyIdMigration}
+            ],
             :up,
             all: true,
             log: false
@@ -112,6 +116,48 @@ defmodule Lithium.Store do
     end)
   end
 
+  def remember_spotify_ids(_conn, []), do: :ok
+
+  def remember_spotify_ids(conn, pairs) when is_list(pairs) do
+    rows =
+      pairs
+      |> Enum.flat_map(fn
+        {isrc, id} when is_binary(isrc) and isrc != "" and is_binary(id) and id != "" ->
+          [%{isrc: String.upcase(isrc), spotify_id: id}]
+
+        _ ->
+          []
+      end)
+      |> Enum.uniq_by(& &1.isrc)
+
+    with_repo(conn, fn ->
+      insert_all(
+        SpotifyId,
+        rows,
+        on_conflict: {:replace, [:spotify_id]},
+        conflict_target: [:isrc]
+      )
+
+      :ok
+    end)
+  end
+
+  def spotify_ids(_conn, []), do: %{}
+
+  def spotify_ids(conn, isrcs) when is_list(isrcs) do
+    wanted = Enum.map(isrcs, &String.upcase/1)
+
+    with_repo(conn, fn ->
+      Repo.all(
+        from(row in SpotifyId,
+          where: row.isrc in ^wanted,
+          select: {row.isrc, row.spotify_id}
+        )
+      )
+      |> Map.new()
+    end)
+  end
+
   def playlist_names(conn) do
     with_repo(conn, fn ->
       Repo.all(from(name in PlaylistName, order_by: [asc: name.name], select: name.name))
@@ -178,10 +224,12 @@ defmodule Lithium.Store do
     insert_all(SnapshotItem, rows)
   end
 
-  defp insert_all(_schema, []), do: {0, nil}
+  defp insert_all(schema, rows, opts \\ [])
 
-  defp insert_all(schema, rows) do
-    Repo.insert_all(schema, rows)
+  defp insert_all(_schema, [], _opts), do: {0, nil}
+
+  defp insert_all(schema, rows, opts) do
+    Repo.insert_all(schema, rows, opts)
   end
 
   defp put_setting(conn, key, value) do

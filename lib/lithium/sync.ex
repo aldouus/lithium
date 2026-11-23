@@ -35,7 +35,7 @@ defmodule Lithium.Sync do
         playlists: sync_playlists(ctx)
       }
 
-      schedule_next(tenant_id)
+      schedule_next(tenant_id, report)
       {:ok, report}
     end
   end
@@ -145,11 +145,24 @@ defmodule Lithium.Sync do
     end)
   end
 
-  defp schedule_next(tenant_id) do
+  defp schedule_next(tenant_id, report) do
     now = System.system_time(:second)
 
     store!(tenant_id, fn conn ->
-      Lithium.Store.put_next_run(conn, now + Lithium.Store.interval(conn))
+      delay = max(Lithium.Store.interval(conn), rate_limit_delay(report))
+      Lithium.Store.put_next_run(conn, now + delay)
+    end)
+  end
+
+  defp rate_limit_delay(report) do
+    report
+    |> Map.values()
+    |> Enum.reduce(0, fn
+      {:error, {:spotify_rate_limit, seconds}}, wait when is_integer(seconds) ->
+        max(wait, seconds)
+
+      _other, wait ->
+        wait
     end)
   end
 
@@ -163,6 +176,8 @@ defmodule Lithium.Sync do
 
     spotify =
       load_songs(fn -> ctx.spotify.liked_songs(ctx.spotify_token, ctx.http) end, ctx, :spotify)
+
+    remember_spotify(ctx, side_index(spotify))
 
     case diff_sets(ctx, side_keys(apple), side_keys(spotify), "favorites") do
       {:skipped, reason} ->
@@ -556,6 +571,8 @@ defmodule Lithium.Sync do
           :spotify
         )
 
+      remember_spotify(ctx, side_index(spotify))
+
       case diff_sets(ctx, side_keys(apple), side_keys(spotify), "playlist:" <> name) do
         {:skipped, reason} ->
           {:skipped, reason}
@@ -742,19 +759,46 @@ defmodule Lithium.Sync do
   end
 
   defp resolve_spotify_ids(ctx, keys) do
-    keys
-    |> each_key()
-    |> Enum.reduce_while({:ok, []}, fn isrc, {:ok, ids} ->
-      case ctx.spotify.search_track(ctx.spotify_token, isrc, ctx.http) do
-        {:ok, %{id: id}} when is_binary(id) and id != "" -> {:cont, {:ok, [id | ids]}}
-        {:ok, _} -> {:cont, {:ok, ids}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, ids} -> {:ok, Enum.uniq(Enum.reverse(ids))}
+    isrcs = each_key(keys)
+    known = store!(ctx.tenant_id, &Lithium.Store.spotify_ids(&1, isrcs))
+    missing = Enum.reject(isrcs, &Map.has_key?(known, &1))
+
+    case search_spotify_ids(ctx, missing, []) do
+      {:ok, found} -> {:ok, Enum.uniq(Map.values(known) ++ found)}
       {:error, _} = error -> error
     end
+  end
+
+  defp search_spotify_ids(_ctx, [], found), do: {:ok, found}
+
+  defp search_spotify_ids(ctx, [isrc | rest], found) do
+    case ctx.spotify.search_track(ctx.spotify_token, isrc, ctx.http) do
+      {:ok, %{id: id}} when is_binary(id) and id != "" ->
+        remember_spotify_ids(ctx, [{isrc, id}])
+        search_spotify_ids(ctx, rest, [id | found])
+
+      {:ok, _} ->
+        search_spotify_ids(ctx, rest, found)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp remember_spotify(ctx, index) when is_map(index) do
+    rows =
+      for {isrc, %{id: id}} <- index,
+          is_binary(isrc) and isrc != "",
+          is_binary(id) and id != "",
+          do: {isrc, id}
+
+    remember_spotify_ids(ctx, rows)
+  end
+
+  defp remember_spotify_ids(_ctx, []), do: :ok
+
+  defp remember_spotify_ids(ctx, rows) do
+    store!(ctx.tenant_id, &Lithium.Store.remember_spotify_ids(&1, rows))
   end
 
   defp reference_for(key, primary, fallback) do

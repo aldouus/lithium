@@ -9,6 +9,9 @@ defmodule Lithium.Spotify.Client do
   # PUT and DELETE /v1/me/library accept at most 40 URIs.
   @library_chunk 40
   @playlist_chunk 100
+  # A short Retry-After is a burst limit. A long one is the quota window, and
+  # the sync resumes later instead of sleeping inside this request.
+  @retry_in_process_ms 5_000
 
   @doc """
   Returns a Spotify access token from `credentials["spotify"]`.
@@ -199,6 +202,7 @@ defmodule Lithium.Spotify.Client do
   end
 
   defp request(token, method, url, extra, opts) do
+    Lithium.Spotify.Pace.wait()
     options = Keyword.merge(extra, method: method, url: url)
 
     token
@@ -212,11 +216,29 @@ defmodule Lithium.Spotify.Client do
       base_url: @api_base,
       auth: {:bearer, token},
       plug: opts[:plug],
-      # Search and library writes share one budget. A 429 waits for Retry-After
-      # instead of failing the song or the batch.
-      retry: :transient,
-      max_retries: 10
+      retry: &rate_limit_retry/2,
+      max_retries: 5
     )
+  end
+
+  defp rate_limit_retry(_request, %{status: status} = response)
+       when status in [408, 429, 500, 502, 503, 504] do
+    delay = retry_delay_ms(response)
+
+    if status == 429 and delay > @retry_in_process_ms do
+      false
+    else
+      {:delay, min(delay, @retry_in_process_ms)}
+    end
+  end
+
+  defp rate_limit_retry(_request, _response), do: false
+
+  defp retry_delay_ms(response) do
+    case Req.Response.get_retry_after(response) do
+      milliseconds when is_integer(milliseconds) and milliseconds >= 0 -> milliseconds
+      _ -> 1_000
+    end
   end
 
   defp refresh_access_token(credentials, spotify, opts) do
@@ -299,6 +321,11 @@ defmodule Lithium.Spotify.Client do
   end
 
   defp normalize({:ok, %{status: 401}}), do: {:error, :spotify_auth}
+
+  defp normalize({:ok, %{status: 429} = response}) do
+    seconds = max(div(retry_delay_ms(response), 1_000), 1)
+    {:error, {:spotify_rate_limit, seconds}}
+  end
 
   defp normalize({:ok, %{status: status, body: body}}), do: {:error, {:spotify, status, body}}
 

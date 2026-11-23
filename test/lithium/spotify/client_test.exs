@@ -221,6 +221,21 @@ defmodule Lithium.Spotify.ClientTest do
              Client.search_track("secret", "USRC17607839", plug: plug)
   end
 
+  test "returns a long rate limit without sleeping through it" do
+    plug = fn conn ->
+      calls = Process.get(:long_rate_calls, 0)
+      Process.put(:long_rate_calls, calls + 1)
+      assert calls == 0
+
+      conn
+      |> Plug.Conn.put_resp_header("retry-after", "84320")
+      |> respond(429, %{"error" => %{"status" => 429, "message" => "API rate limit exceeded"}})
+    end
+
+    assert {:error, {:spotify_rate_limit, 84_320}} =
+             Client.search_track("secret", "USRC17607839", plug: plug)
+  end
+
   test "retries a rate limited search and keeps the matching track" do
     plug = fn conn ->
       calls = Process.get(:rate_calls, 0)

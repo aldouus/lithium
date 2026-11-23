@@ -12,6 +12,10 @@ defmodule Lithium.Spotify do
   Pass `plug:` through every request so tests can stub Req. Refresh an expired
   access token with the app client id and secret before a library call. A 401
   after a refresh is `{:error, :spotify_auth}`.
+
+  Calls are paced to about one per second. A resolved ISRC is stored, and a
+  later sync reuses that Spotify id instead of searching again. A 429 whose
+  `Retry-After` is longer than a few seconds is `{:error, {:spotify_rate_limit, seconds}}`.
   """
 
   alias Lithium.Catalog

@@ -2,6 +2,8 @@ import Config
 
 config :lithium, data_root: Path.join(System.tmp_dir!(), "lithium-test")
 
+config :lithium, spotify_pace_ms: 0
+
 config :lithium, Lithium.Repo, log: false
 
 config :lithium, Lithium.Accounts.Repo, log: false

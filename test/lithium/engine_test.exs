@@ -27,11 +27,13 @@ defmodule Lithium.EngineTest do
              {:ok, plan(%{apple_add: set(["new"])})}
   end
 
-  test "drops a spotify add when apple removed the same key" do
-    snapshot = %{apple: set(["clash"]), spotify: set([])}
+  test "an empty apple read does not remove spotify likes" do
+    snapshot = %{apple: set(["keep", "also"]), spotify: set(["keep", "also", "extra"])}
 
-    assert Engine.diff(set([]), set(["clash"]), snapshot, :spotify) ==
-             {:ok, plan(%{spotify_remove: set(["clash"])})}
+    assert Engine.diff(set([]), set(["keep", "also", "extra"]), nil, :apple) == {:ok, plan()}
+
+    assert Engine.diff(set([]), set(["keep", "also", "extra"]), snapshot, :apple) ==
+             {:ok, plan()}
   end
 
   test "leaves a key that was already only on one side" do

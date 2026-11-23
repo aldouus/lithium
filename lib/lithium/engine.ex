@@ -35,7 +35,7 @@ defmodule Lithium.Engine do
     {:ok,
      plan(
        spotify_add: MapSet.difference(apple, spotify),
-       spotify_remove: MapSet.difference(spotify, apple)
+       spotify_remove: spotify_removals(spotify, apple)
      )}
   end
 
@@ -58,7 +58,7 @@ defmodule Lithium.Engine do
   end
 
   defp reconcile(apple, spotify, snap_apple, snap_spotify) do
-    apple_removed = MapSet.difference(snap_apple, apple)
+    apple_removed = apple_removals(snap_apple, apple)
     spotify_removed = MapSet.difference(snap_spotify, spotify)
     removed = MapSet.union(apple_removed, spotify_removed)
 
@@ -71,6 +71,15 @@ defmodule Lithium.Engine do
       spotify_add: apple_added |> MapSet.difference(removed) |> MapSet.difference(spotify),
       spotify_remove: MapSet.intersection(spotify, removed)
     )
+  end
+
+  # An empty read is not a signal to delete the other library.
+  defp spotify_removals(spotify, apple) do
+    if MapSet.size(apple) == 0, do: MapSet.new(), else: MapSet.difference(spotify, apple)
+  end
+
+  defp apple_removals(snapshot, apple) do
+    if MapSet.size(apple) == 0, do: MapSet.new(), else: MapSet.difference(snapshot, apple)
   end
 
   defp plan(fields) do

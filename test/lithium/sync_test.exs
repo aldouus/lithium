@@ -453,7 +453,7 @@ defmodule Lithium.SyncTest do
     {:ok,
      plan(
        spotify_add: MapSet.difference(apple, spotify),
-       spotify_remove: MapSet.difference(spotify, apple)
+       spotify_remove: spotify_removals(spotify, apple)
      )}
   end
 
@@ -473,8 +473,7 @@ defmodule Lithium.SyncTest do
        )
        when priority in [:apple, :spotify] do
     removed =
-      snap_apple
-      |> MapSet.difference(apple)
+      apple_removals(snap_apple, apple)
       |> MapSet.union(MapSet.difference(snap_spotify, spotify))
 
     apple_added = MapSet.difference(apple, snap_apple)
@@ -487,6 +486,14 @@ defmodule Lithium.SyncTest do
        spotify_add: apple_added |> MapSet.difference(removed) |> MapSet.difference(spotify),
        spotify_remove: MapSet.intersection(spotify, removed)
      )}
+  end
+
+  defp spotify_removals(spotify, apple) do
+    if MapSet.size(apple) == 0, do: MapSet.new(), else: MapSet.difference(spotify, apple)
+  end
+
+  defp apple_removals(snapshot, apple) do
+    if MapSet.size(apple) == 0, do: MapSet.new(), else: MapSet.difference(snapshot, apple)
   end
 
   defp isrc_match?(%{isrc: candidate}, isrc) when is_binary(candidate) do
